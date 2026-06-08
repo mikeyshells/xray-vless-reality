@@ -22,12 +22,75 @@ pause() {
     echo
 }
 
+# 检测系统类型与包管理器
+PKG_MGR=""
+OS_FAMILY=""
+if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-}" in
+        debian | ubuntu)
+            OS_FAMILY=debian
+            PKG_MGR=apt
+            ;;
+        centos | rhel | rocky | almalinux | fedora | ol)
+            OS_FAMILY=rhel
+            if command -v dnf &>/dev/null; then
+                PKG_MGR=dnf
+            else
+                PKG_MGR=yum
+            fi
+            ;;
+    esac
+fi
+if [[ -z "$PKG_MGR" ]]; then
+    if command -v apt-get &>/dev/null; then
+        OS_FAMILY=debian
+        PKG_MGR=apt
+    elif command -v dnf &>/dev/null; then
+        OS_FAMILY=rhel
+        PKG_MGR=dnf
+    elif command -v yum &>/dev/null; then
+        OS_FAMILY=rhel
+        PKG_MGR=yum
+    fi
+fi
+
+pkg_update() {
+    case "$PKG_MGR" in
+        apt) apt update ;;
+        dnf) dnf makecache -y ;;
+        yum) yum makecache -y ;;
+    esac
+}
+
+pkg_install() {
+    case "$PKG_MGR" in
+        apt) apt-get -y install "$@" -qq ;;
+        dnf) dnf install -y "$@" ;;
+        yum) yum install -y "$@" ;;
+        *)
+            echo -e "\n$red 不支持的系统, 请手动安装依赖: curl wget sudo jq qrencode net-tools lsof $none\n"
+            exit 1
+            ;;
+    esac
+}
+
+ensure_epel() {
+    if [[ "$OS_FAMILY" == "rhel" ]] && ! rpm -q epel-release &>/dev/null; then
+        pkg_install epel-release
+    fi
+}
+
 # 确保有 curl 和 wget
-apt-get -y install curl wget -qq
+pkg_install curl wget
 
 # 说明
 echo
-echo -e "$yellow此脚本仅兼容于Debian 10+系统. 如果你的系统不符合,请Ctrl+C退出脚本$none"
+echo -e "$yellow此脚本兼容 Debian 10+ / Ubuntu 及 CentOS 8+ (RHEL系). 如果你的系统不符合,请Ctrl+C退出脚本$none"
+if [[ "${ID:-}" == "centos" && "${VERSION_ID:-}" == "8" ]]; then
+    echo -e "$yellow CentOS 8 已 EOL, 若软件包安装失败, 请先将 yum/dnf 源切换到 vault.centos.org $none"
+fi
 echo -e "可以去 ${cyan}https://github.com/crazypeace/xray-vless-reality${none} 查看脚本整体思路和关键命令, 以便针对你自己的系统做出调整."
 echo -e "有问题加群 ${cyan}https://t.me/+q5WPfGjtwukyZjhl${none}"
 echo -e "本脚本支持带参数执行, 省略交互过程, 详见GitHub."
@@ -174,8 +237,9 @@ fi
 pause
 
 # 准备工作
-apt update
-apt install -y curl wget sudo jq qrencode net-tools lsof
+pkg_update
+ensure_epel
+pkg_install curl wget sudo jq qrencode net-tools lsof
 
 # Xray官方脚本 安装最新版本
 echo
