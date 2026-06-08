@@ -277,11 +277,11 @@ if [[ $_use_env_vars -eq 1 ]]; then
         port=443
     fi
 
-    # _MYDOMAIN_: 域名, 默认 climamon.com
+    # _MYDOMAIN_: 域名, 默认 learn.microsoft.com
     if [[ -n "${_MYDOMAIN_}" ]]; then
         domain="${_MYDOMAIN_}"
     else
-        domain="climamon.com"
+        domain="learn.microsoft.com"
     fi
 
     # _MYUUID_: UUID, 默认使用种子生成的 UUID
