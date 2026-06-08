@@ -59,8 +59,20 @@ fi
 pkg_update() {
     case "$PKG_MGR" in
         apt) apt update ;;
-        dnf) dnf makecache -y ;;
-        yum) yum makecache -y ;;
+        dnf)
+            prepare_rhel_repos
+            if ! dnf makecache -y; then
+                fix_epel_repos
+                dnf makecache -y
+            fi
+            ;;
+        yum)
+            prepare_rhel_repos
+            if ! yum makecache -y; then
+                fix_epel_repos
+                yum makecache -y
+            fi
+            ;;
     esac
 }
 
@@ -76,13 +88,79 @@ pkg_install() {
     esac
 }
 
+fix_centos8_repos() {
+    if [[ "${ID:-}" != "centos" || "${VERSION_ID%%.*}" != "8" ]]; then
+        return 0
+    fi
+    for repo in /etc/yum.repos.d/CentOS-*.repo; do
+        [[ -f "$repo" ]] || continue
+        if grep -qE '^mirrorlist=' "$repo" 2>/dev/null; then
+            sed -i 's/^mirrorlist=/#mirrorlist=/g' "$repo"
+            sed -i 's|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' "$repo"
+        fi
+        sed -i 's|download\.example|vault.centos.org|g' "$repo" 2>/dev/null || true
+    done
+}
+
+fix_epel_repos() {
+    if [[ "$OS_FAMILY" != "rhel" ]]; then
+        return 0
+    fi
+
+    local releasever="${VERSION_ID%%.*}"
+    [[ -n "$releasever" ]] || releasever=8
+    local epel_baseurl="https://dl.fedoraproject.org/pub/epel/${releasever}/Everything/\$basearch/"
+
+    for repo in /etc/yum.repos.d/epel*.repo; do
+        [[ -f "$repo" ]] || continue
+        # metalink 解析失败时会回落到 repo 文件里的 download.example 示例地址
+        sed -i \
+            -e 's|^metalink=|#metalink=|g' \
+            -e 's|https://download\.example|https://dl.fedoraproject.org|g' \
+            -e 's|https://download\.fedoraproject\.org|https://dl.fedoraproject.org|g' \
+            -e 's|^#baseurl=https://dl\.fedoraproject\.org/pub/epel/|baseurl=https://dl.fedoraproject.org/pub/epel/|g' \
+            -e 's|^baseurl=https://dl\.fedoraproject\.org/pub/epel/|baseurl=https://dl.fedoraproject.org/pub/epel/|g' \
+            "$repo"
+        if grep -q '^\[epel\]' "$repo" && ! grep -qE '^baseurl=https://dl\.fedoraproject\.org/pub/epel/' "$repo"; then
+            sed -i "/^\[epel\]/a baseurl=${epel_baseurl}" "$repo"
+        fi
+    done
+
+    case "$PKG_MGR" in
+        dnf) dnf clean metadata -y &>/dev/null || dnf clean all -y &>/dev/null || true ;;
+        yum) yum clean metadata -y &>/dev/null || yum clean all -y &>/dev/null || true ;;
+    esac
+}
+
+prepare_rhel_repos() {
+    if [[ "$OS_FAMILY" != "rhel" ]]; then
+        return 0
+    fi
+    fix_centos8_repos
+    fix_epel_repos
+}
+
 ensure_epel() {
-    if [[ "$OS_FAMILY" == "rhel" ]] && ! rpm -q epel-release &>/dev/null; then
-        pkg_install epel-release
+    if [[ "$OS_FAMILY" != "rhel" ]]; then
+        return 0
+    fi
+
+    local releasever="${VERSION_ID%%.*}"
+    [[ -n "$releasever" ]] || releasever=8
+
+    prepare_rhel_repos
+
+    if ! rpm -q epel-release &>/dev/null; then
+        local epel_rpm="https://dl.fedoraproject.org/pub/epel/epel-release-latest-${releasever}.noarch.rpm"
+        if ! rpm -Uvh --replacepkgs "$epel_rpm"; then
+            warn "EPEL 安装失败, jq/qrencode 可能无法通过 yum/dnf 安装"
+        fi
+        fix_epel_repos
     fi
 }
 
 # 确保有 curl 和 wget
+prepare_rhel_repos
 pkg_install curl wget
 
 # 说明
@@ -237,8 +315,8 @@ fi
 pause
 
 # 准备工作
-pkg_update
 ensure_epel
+pkg_update
 pkg_install curl wget sudo jq qrencode net-tools lsof
 
 # Xray官方脚本 安装最新版本
