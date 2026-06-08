@@ -56,22 +56,32 @@ if [[ -z "$PKG_MGR" ]]; then
     fi
 fi
 
+rhel_needs_epel() {
+    for pkg in "$@"; do
+        case "$pkg" in
+            jq | qrencode) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 pkg_update() {
     case "$PKG_MGR" in
         apt) apt update ;;
         dnf)
-            prepare_rhel_repos
-            if ! dnf makecache -y; then
-                fix_epel_repos
-                dnf makecache -y
-            fi
+            fix_centos8_repos
+            dnf makecache -y --disablerepo='epel,epel-*' &>/dev/null || true
+            write_epel_repo
+            dnf clean metadata -y --disablerepo='epel,epel-*' &>/dev/null || true
+            rm -rf /var/cache/dnf/*epel* /var/lib/dnf/*epel* 2>/dev/null || true
+            dnf makecache -y
             ;;
         yum)
-            prepare_rhel_repos
-            if ! yum makecache -y; then
-                fix_epel_repos
-                yum makecache -y
-            fi
+            fix_centos8_repos
+            yum makecache -y --disablerepo='epel,epel-*' &>/dev/null || true
+            write_epel_repo
+            yum clean metadata -y --disablerepo='epel,epel-*' &>/dev/null || true
+            yum makecache -y
             ;;
     esac
 }
@@ -79,8 +89,24 @@ pkg_update() {
 pkg_install() {
     case "$PKG_MGR" in
         apt) apt-get -y install "$@" -qq ;;
-        dnf) dnf install -y "$@" ;;
-        yum) yum install -y "$@" ;;
+        dnf)
+            fix_centos8_repos
+            if rhel_needs_epel "$@"; then
+                ensure_epel
+                dnf install -y "$@"
+            else
+                dnf install -y --disablerepo='epel,epel-*' "$@"
+            fi
+            ;;
+        yum)
+            fix_centos8_repos
+            if rhel_needs_epel "$@"; then
+                ensure_epel
+                yum install -y "$@"
+            else
+                yum install -y --disablerepo='epel,epel-*' "$@"
+            fi
+            ;;
         *)
             echo -e "\n$red 不支持的系统, 请手动安装依赖: curl wget sudo jq qrencode net-tools lsof $none\n"
             exit 1
@@ -102,42 +128,44 @@ fix_centos8_repos() {
     done
 }
 
-fix_epel_repos() {
+write_epel_repo() {
     if [[ "$OS_FAMILY" != "rhel" ]]; then
         return 0
     fi
 
     local releasever="${VERSION_ID%%.*}"
     [[ -n "$releasever" ]] || releasever=8
-    local epel_baseurl="https://dl.fedoraproject.org/pub/epel/${releasever}/Everything/\$basearch/"
 
-    for repo in /etc/yum.repos.d/epel*.repo; do
-        [[ -f "$repo" ]] || continue
-        # metalink 解析失败时会回落到 repo 文件里的 download.example 示例地址
-        sed -i \
-            -e 's|^metalink=|#metalink=|g' \
-            -e 's|https://download\.example|https://dl.fedoraproject.org|g' \
-            -e 's|https://download\.fedoraproject\.org|https://dl.fedoraproject.org|g' \
-            -e 's|^#baseurl=https://dl\.fedoraproject\.org/pub/epel/|baseurl=https://dl.fedoraproject.org/pub/epel/|g' \
-            -e 's|^baseurl=https://dl\.fedoraproject\.org/pub/epel/|baseurl=https://dl.fedoraproject.org/pub/epel/|g' \
-            "$repo"
-        if grep -q '^\[epel\]' "$repo" && ! grep -qE '^baseurl=https://dl\.fedoraproject\.org/pub/epel/' "$repo"; then
-            sed -i "/^\[epel\]/a baseurl=${epel_baseurl}" "$repo"
-        fi
+    # 直接覆盖写入, 避免 metalink / download.example 示例地址导致 dnf 失败
+    cat > /etc/yum.repos.d/epel.repo <<EOF
+[epel]
+name=Extra Packages for Enterprise Linux ${releasever} - \$basearch
+baseurl=https://dl.fedoraproject.org/pub/epel/${releasever}/Everything/\$basearch/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=0
+type=rpm
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever}
+
+[epel-debuginfo]
+name=Extra Packages for Enterprise Linux ${releasever} - \$basearch - Debug
+baseurl=https://dl.fedoraproject.org/pub/epel/${releasever}/debug/\$basearch/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever}
+
+[epel-source]
+name=Extra Packages for Enterprise Linux ${releasever} - \$basearch - Source
+baseurl=https://dl.fedoraproject.org/pub/epel/${releasever}/Source/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever}
+EOF
+
+    rm -f /etc/yum.repos.d/epel.repo.rpmnew /etc/yum.repos.d/epel.repo.rpmsave 2>/dev/null || true
+    for extra in /etc/yum.repos.d/epel-modular.repo /etc/yum.repos.d/epel-testing.repo; do
+        [[ -f "$extra" ]] && sed -i 's/^enabled=1/enabled=0/g' "$extra" 2>/dev/null || true
     done
-
-    case "$PKG_MGR" in
-        dnf) dnf clean metadata -y &>/dev/null || dnf clean all -y &>/dev/null || true ;;
-        yum) yum clean metadata -y &>/dev/null || yum clean all -y &>/dev/null || true ;;
-    esac
-}
-
-prepare_rhel_repos() {
-    if [[ "$OS_FAMILY" != "rhel" ]]; then
-        return 0
-    fi
-    fix_centos8_repos
-    fix_epel_repos
 }
 
 ensure_epel() {
@@ -147,20 +175,29 @@ ensure_epel() {
 
     local releasever="${VERSION_ID%%.*}"
     [[ -n "$releasever" ]] || releasever=8
+    local epel_rpm="https://dl.fedoraproject.org/pub/epel/epel-release-latest-${releasever}.noarch.rpm"
+    local gpg_key="/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever}"
 
-    prepare_rhel_repos
+    fix_centos8_repos
 
-    if ! rpm -q epel-release &>/dev/null; then
-        local epel_rpm="https://dl.fedoraproject.org/pub/epel/epel-release-latest-${releasever}.noarch.rpm"
-        if ! rpm -Uvh --replacepkgs "$epel_rpm"; then
-            warn "EPEL 安装失败, jq/qrencode 可能无法通过 yum/dnf 安装"
+    # 仅安装 GPG 密钥; epel-release 的 %post 会重写 epel.repo, 所以安装后必须再次覆盖
+    if [[ ! -f "$gpg_key" ]] || ! rpm -q epel-release &>/dev/null; then
+        curl -fsSL -o /tmp/epel-release.rpm "$epel_rpm" || wget -q -O /tmp/epel-release.rpm "$epel_rpm"
+        if [[ -f /tmp/epel-release.rpm ]]; then
+            rpm -Uvh --replacepkgs /tmp/epel-release.rpm || warn "EPEL release 包安装失败"
+            rm -f /tmp/epel-release.rpm
+        else
+            warn "无法下载 EPEL release 包, jq/qrencode 可能无法安装"
         fi
-        fix_epel_repos
     fi
+
+    write_epel_repo
 }
 
 # 确保有 curl 和 wget
-prepare_rhel_repos
+if [[ "$OS_FAMILY" == "rhel" ]]; then
+    fix_centos8_repos
+fi
 pkg_install curl wget
 
 # 说明
