@@ -373,8 +373,18 @@ for service_file in /etc/systemd/system/xray.service /etc/systemd/system/xray@.s
   if [[ -f ${service_file} ]]; then
     sed -i 's/^User=.*/User=root/' ${service_file}
     sed -i 's/^Group=.*/Group=root/' ${service_file}
+    # 官方为 nobody 运行时会限制 Capability, 以 root 运行必须去掉这些限制,
+    # 否则 root 进程会丢失 CAP_DAC_OVERRIDE, 无法写入属主为 nobody 的日志文件,
+    # 导致 /var/log/xray/access.log 报 permission denied
+    sed -i 's/^CapabilityBoundingSet=/#CapabilityBoundingSet=/' ${service_file}
+    sed -i 's/^AmbientCapabilities=/#AmbientCapabilities=/' ${service_file}
   fi
 done
+
+# 日志目录及文件属主改为 root, 与运行用户保持一致
+mkdir -p /var/log/xray
+chown -R root:root /var/log/xray
+
 systemctl daemon-reload
 
 # 如果脚本带参数执行的, 要在安装了xray之后再生成默认私钥公钥shortID
