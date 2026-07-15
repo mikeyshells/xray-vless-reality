@@ -358,14 +358,26 @@ pkg_install curl wget sudo jq qrencode net-tools lsof
 
 # Xray官方脚本 安装最新版本
 echo
-echo -e "${yellow}Xray官方脚本安装 v25.10.15 版本$none"
-# echo -e "${yellow}Xray官方脚本安装最新版本$none"
+echo -e "${yellow}Xray官方脚本安装最新版本$none"
 echo "----------------------------------------------------------------"
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version v25.10.15
-# bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
 # 更新 geodata
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
+
+# 修改 Xray 运行用户为 root (官方脚本默认使用 nobody)
+# 使用 systemd drop-in 覆盖 User/Group, 同时对 xray.service 和 xray@.service 生效
+echo
+echo -e "${yellow}修改 Xray 运行用户为 root$none"
+for svc in xray xray@; do
+  mkdir -p /etc/systemd/system/${svc}.service.d
+  cat > /etc/systemd/system/${svc}.service.d/10-run-as-root.conf <<-EOF
+[Service]
+User=root
+Group=
+EOF
+done
+systemctl daemon-reload
 
 # 如果脚本带参数执行的, 要在安装了xray之后再生成默认私钥公钥shortID
 if [[ -n $uuid ]]; then
@@ -559,38 +571,21 @@ echo
 echo -e "$yellow 配置 /usr/local/etc/xray/config.json $none"
 echo "----------------------------------------------------------------"
 cat > /usr/local/etc/xray/config.json <<-EOF
-{ // VLESS + Reality
+{
   "log": {
     "access": "/var/log/xray/access.log",
     "error": "/var/log/xray/error.log",
     "loglevel": "warning"
   },
   "inbounds": [
-    // [inbound] 如果你想使用其它翻墙服务端如(HY2或者NaiveProxy)对接v2ray的分流规则, 那么取消下面一段的注释, 并让其它翻墙服务端接到下面这个socks 1080端口
-    // {
-    //   "listen":"127.0.0.1",
-    //   "port":1080,
-    //   "protocol":"socks",
-    //   "sniffing":{
-    //     "enabled":true,
-    //     "destOverride":[
-    //       "http",
-    //       "tls"
-    //     ]
-    //   },
-    //   "settings":{
-    //     "auth":"noauth",
-    //     "udp":false
-    //   }
-    // },
     {
       "listen": "0.0.0.0",
-      "port": ${port},    // ***
+      "port": ${port},
       "protocol": "vless",
       "settings": {
         "clients": [
           {
-            "id": "${uuid}",    // ***
+            "id": "${uuid}",
             "flow": "xtls-rprx-vision"
           }
         ],
@@ -601,11 +596,11 @@ cat > /usr/local/etc/xray/config.json <<-EOF
         "security": "reality",
         "realitySettings": {
           "show": false,
-          "dest": "${domain}:443",    // ***
+          "dest": "${domain}:443",
           "xver": 0,
-          "serverNames": ["${domain}"],    // ***
-          "privateKey": "${private_key}",    // ***私钥
-          "shortIds": ["${shortid}"]    // ***
+          "serverNames": ["${domain}"],
+          "privateKey": "${private_key}",
+          "shortIds": ["${shortid}"]
         }
       },
       "sniffing": {
@@ -619,31 +614,30 @@ cat > /usr/local/etc/xray/config.json <<-EOF
       "protocol": "freedom",
       "tag": "direct"
     },
-// [outbound]
-{
-    "protocol": "freedom",
-    "settings": {
-        "domainStrategy": "UseIPv4"
+    {
+        "protocol": "freedom",
+        "settings": {
+            "domainStrategy": "UseIPv4"
+        },
+        "tag": "force-ipv4"
     },
-    "tag": "force-ipv4"
-},
-{
-    "protocol": "freedom",
-    "settings": {
-        "domainStrategy": "UseIPv6"
+    {
+        "protocol": "freedom",
+        "settings": {
+            "domainStrategy": "UseIPv6"
+        },
+        "tag": "force-ipv6"
     },
-    "tag": "force-ipv6"
-},
-{
-    "protocol": "socks",
-    "settings": {
-        "servers": [{
-            "address": "127.0.0.1",
-            "port": 40000 //warp socks5 port
-        }]
-     },
-    "tag": "socks5-warp"
-},
+    {
+        "protocol": "socks",
+        "settings": {
+            "servers": [{
+                "address": "127.0.0.1",
+                "port": 40000
+            }]
+        },
+        "tag": "socks5-warp"
+    },
     {
       "protocol": "blackhole",
       "tag": "block"
@@ -661,22 +655,6 @@ cat > /usr/local/etc/xray/config.json <<-EOF
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
-// [routing-rule]
-//{
-//   "type": "field",
-//   "domain": ["geosite:google", "geosite:openai"],  // ***
-//   "outboundTag": "force-ipv6"  // force-ipv6 // force-ipv4 // socks5-warp
-//},
-//{
-//   "type": "field",
-//   "domain": ["geosite:cn"],  // ***
-//   "outboundTag": "force-ipv6"  // force-ipv6 // force-ipv4 // socks5-warp // blocked
-//},
-//{
-//   "type": "field",
-//   "ip": ["geoip:cn"],  // ***
-//   "outboundTag": "force-ipv6"  // force-ipv6 // force-ipv4 // socks5-warp // blocked
-//},
       {
         "type": "field",
         "ip": ["geoip:private"],
