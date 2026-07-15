@@ -365,17 +365,15 @@ bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release
 # 更新 geodata
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
 
-# 修改 Xray 运行用户为 root (官方脚本默认使用 nobody)
-# 使用 systemd drop-in 覆盖 User/Group, 同时对 xray.service 和 xray@.service 生效
+# 官方脚本默认以 nobody 用户运行 Xray, 这里改为 root 用户运行
 echo
-echo -e "${yellow}修改 Xray 运行用户为 root$none"
-for svc in xray xray@; do
-  mkdir -p /etc/systemd/system/${svc}.service.d
-  cat > /etc/systemd/system/${svc}.service.d/10-run-as-root.conf <<-EOF
-[Service]
-User=root
-Group=
-EOF
+echo -e "${yellow}修改 Xray 服务运行用户为 root$none"
+echo "----------------------------------------------------------------"
+for service_file in /etc/systemd/system/xray.service /etc/systemd/system/xray@.service; do
+  if [[ -f ${service_file} ]]; then
+    sed -i 's/^User=.*/User=root/' ${service_file}
+    sed -i 's/^Group=.*/Group=root/' ${service_file}
+  fi
 done
 systemctl daemon-reload
 
