@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # 等待1秒, 避免curl下载脚本的打印与脚本本身的显示冲突, 吃掉了提示用户按回车继续的信息
 sleep 1
 
@@ -194,6 +196,38 @@ ensure_epel() {
     write_epel_repo
 }
 
+# 重启 Xray 服务
+# Rocky / RHEL 等最小化安装默认不带 initscripts, 没有 service 命令, 全部走 systemd,
+# 因此优先使用 systemctl, 仅在没有 systemctl 时回退到 service
+restart_xray() {
+    if command -v systemctl &>/dev/null; then
+        systemctl restart xray
+    elif command -v service &>/dev/null; then
+        service xray restart
+    else
+        warn "未找到 systemctl 或 service 命令, 请手动重启 Xray"
+    fi
+}
+
+# 放行防火墙端口
+# Rocky / RHEL / CentOS / AlmaLinux 默认启用 firewalld, 会拦截自定义端口, 必须放行;
+# Debian / Ubuntu 若启用了 ufw 也一并放行
+open_firewall_port() {
+    local p=$1
+    [[ -z "$p" ]] && return 0
+
+    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        firewall-cmd --permanent --add-port="${p}/tcp" &>/dev/null
+        firewall-cmd --reload &>/dev/null
+        echo -e "$yellow 已在 firewalld 放行端口 ${cyan}${p}/tcp${none}"
+    fi
+
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qi "Status: active"; then
+        ufw allow "${p}/tcp" &>/dev/null
+        echo -e "$yellow 已在 ufw 放行端口 ${cyan}${p}/tcp${none}"
+    fi
+}
+
 # 确保有 curl 和 wget
 if [[ "$OS_FAMILY" == "rhel" ]]; then
     fix_centos8_repos
@@ -202,7 +236,7 @@ pkg_install curl wget
 
 # 说明
 echo
-echo -e "$yellow此脚本兼容 Debian 10+ / Ubuntu 及 CentOS 8+ (RHEL系). 如果你的系统不符合,请Ctrl+C退出脚本$none"
+echo -e "$yellow此脚本兼容 Debian 10+ / Ubuntu 及 RHEL 系 (CentOS 8+ / Rocky Linux / AlmaLinux). 如果你的系统不符合,请Ctrl+C退出脚本$none"
 if [[ "${ID:-}" == "centos" && "${VERSION_ID:-}" == "8" ]]; then
     echo -e "$yellow CentOS 8 已 EOL, 若软件包安装失败, 请先将 yum/dnf 源切换到 vault.centos.org $none"
 fi
@@ -673,11 +707,14 @@ cat > /usr/local/etc/xray/config.json <<-EOF
 }
 EOF
 
+# 放行防火墙端口 (Rocky/RHEL 默认 firewalld 会拦截自定义端口)
+open_firewall_port "$port"
+
 # 重启 Xray
 echo
 echo -e "$yellow重启 Xray$none"
 echo "----------------------------------------------------------------"
-service xray restart
+restart_xray
 
 # 指纹FingerPrint
 fingerprint="random"
@@ -722,47 +759,6 @@ echo $vless_reality_url > ~/_vless_reality_url_
 echo "以下两个二维码完全一样的内容" >> ~/_vless_reality_url_
 qrencode -t UTF8 $vless_reality_url >> ~/_vless_reality_url_
 qrencode -t ANSI $vless_reality_url >> ~/_vless_reality_url_
-
-# 如果是 IPv6 小鸡，用 WARP 创建 IPv4 出站
-if [[ $netstack == "6" ]]; then
-    echo
-    echo -e "$yellow这是一个 IPv6 小鸡，用 WARP 创建 IPv4 出站$none"
-    echo "Telegram电报是直接访问IPv4地址的, 需要IPv4出站的能力"
-    echo "----------------------------------------------------------------"
-    pause
-
-    # 安装 WARP IPv4
-    curl -LO https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh
-    yes "" | bash menu.sh 4
-
-    # 重启 Xray
-    echo
-    echo -e "$yellow重启 Xray$none"
-    echo "----------------------------------------------------------------"
-    service xray restart
-
-# 如果是 IPv4 小鸡，用 WARP 创建 IPv6 出站
-elif  [[ $netstack == "4" ]]; then
-    echo
-    echo -e "$yellow这是一个 IPv4 小鸡，用 WARP 创建 IPv6 出站$none"
-    echo -e "有些热门小鸡用原生的IPv4出站访问Google需要通过人机验证, 可以通过修改config.json指定google流量走WARP的IPv6出站解决"
-    echo -e "群组: ${cyan} https://t.me/+q5WPfGjtwukyZjhl ${none}"
-    echo -e "教程: ${cyan} https://zelikk.blogspot.com/2022/03/racknerd-v2ray-cloudflare-warp--ipv6-google-domainstrategy-outboundtag-routing.html ${none}"
-    echo -e "视频: ${cyan} https://youtu.be/Yvvm4IlouEk ${none}"
-    echo "----------------------------------------------------------------"
-    pause
-
-    # 安装 WARP IPv6
-    curl -LO https://gitlab.com/fscarmen/warp/-/raw/main/menu.sh
-    yes "" | bash menu.sh 6
-
-    # 重启 Xray
-    echo
-    echo -e "$yellow重启 Xray$none"
-    echo "----------------------------------------------------------------"
-    service xray restart
-
-fi
 
 echo
 echo "节点信息保存在 ~/_vless_reality_url_ 中"
