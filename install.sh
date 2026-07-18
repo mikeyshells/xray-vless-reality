@@ -388,7 +388,7 @@ pause
 # 准备工作
 ensure_epel
 pkg_update
-pkg_install curl wget sudo jq qrencode net-tools lsof
+pkg_install curl wget sudo jq qrencode net-tools lsof unzip
 
 # Xray官方脚本 安装最新版本
 echo
@@ -430,9 +430,9 @@ if [[ -n $uuid ]]; then
   # 生成私钥公钥
   # xray x25519 如果接收一个合法的私钥, 会生成对应的公钥. 如果接收一个非法的私钥, 会先"修正"为合法的私钥. 这个"修正"的过程, 会修改其中的一些字节
   # https://github.dev/XTLS/Xray-core/blob/6830089d3c42483512842369c908f9de75da2eaa/main/commands/all/curve25519.go#L36
-  tmp_key=$(echo -n ${reality_key_seed} | xargs xray x25519 -i)
-  private_key=$(echo ${tmp_key} | awk '{print $2}')
-  public_key=$(echo ${tmp_key} | awk '{print $4}')
+  tmp_key=$(xray x25519 -i "${reality_key_seed}")
+  private_key=$(echo "$tmp_key" | sed -n 's/^PrivateKey:[[:space:]]*//p')
+  public_key=$(echo "$tmp_key" | sed -n 's/^Password[^:]*:[[:space:]]*//p')
 
   # ShortID
   shortid=$(echo -n ${uuid} | sha1sum | head -c 16)
@@ -546,9 +546,9 @@ if [[ -z $private_key ]]; then
   # 生成私钥公钥
   # xray x25519 如果接收一个合法的私钥, 会生成对应的公钥. 如果接收一个非法的私钥, 会先"修正"为合法的私钥. 这个"修正"的过程, 会修改其中的一些字节
   # https://github.dev/XTLS/Xray-core/blob/6830089d3c42483512842369c908f9de75da2eaa/main/commands/all/curve25519.go#L36
-  tmp_key=$(echo -n ${reality_key_seed} | xargs xray x25519 -i)
-  default_private_key=$(echo ${tmp_key} | awk '{print $2}')
-  default_public_key=$(echo ${tmp_key} | awk '{print $4}')
+  tmp_key=$(xray x25519 -i "${reality_key_seed}")
+  default_private_key=$(echo "$tmp_key" | sed -n 's/^PrivateKey:[[:space:]]*//p')
+  default_public_key=$(echo "$tmp_key" | sed -n 's/^Password[^:]*:[[:space:]]*//p')
 
   echo -e "请输入 "$yellow"x25519 Private Key"$none" x25519私钥 :"
   read -p "$(echo -e "(默认私钥 Private Key: ${cyan}${default_private_key}$none):")" private_key
@@ -556,9 +556,9 @@ if [[ -z $private_key ]]; then
     private_key=$default_private_key
     public_key=$default_public_key
   else
-    tmp_key=$(echo -n ${private_key} | xargs xray x25519 -i)
-    private_key=$(echo ${tmp_key} | awk '{print $2}')
-    public_key=$(echo ${tmp_key} | awk '{print $4}')
+    tmp_key=$(xray x25519 -i "${private_key}")
+    private_key=$(echo "$tmp_key" | sed -n 's/^PrivateKey:[[:space:]]*//p')
+    public_key=$(echo "$tmp_key" | sed -n 's/^Password[^:]*:[[:space:]]*//p')
   fi
 
   echo
@@ -657,28 +657,28 @@ cat > /usr/local/etc/xray/config.json <<-EOF
       "tag": "direct"
     },
     {
-        "protocol": "freedom",
-        "settings": {
-            "domainStrategy": "UseIPv4"
-        },
-        "tag": "force-ipv4"
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      },
+      "tag": "force-ipv4"
     },
     {
-        "protocol": "freedom",
-        "settings": {
-            "domainStrategy": "UseIPv6"
-        },
-        "tag": "force-ipv6"
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv6"
+      },
+      "tag": "force-ipv6"
     },
     {
-        "protocol": "socks",
-        "settings": {
-            "servers": [{
-                "address": "127.0.0.1",
-                "port": 40000
-            }]
-        },
-        "tag": "socks5-warp"
+      "protocol": "socks",
+      "settings": {
+        "servers": [{
+          "address": "127.0.0.1",
+          "port": 40000
+        }]
+      },
+      "tag": "socks5-warp"
     },
     {
       "protocol": "blackhole",
